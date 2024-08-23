@@ -12,9 +12,9 @@
 double a = 400.0;
 double b = 150.0;
 
-double Nx = -5.05;
-double Ny = 0.2;
-double Tau = 0.1;
+double Nx = -1200;
+double Ny = -800;
+double Tau = 800;
 
 double plyThickness = 0.184;
 
@@ -104,7 +104,10 @@ struct Stack {
     std::pmr::vector<PlyOrientation> stackingSequence;
     DMatrix D;
     double fitness{};
+    double fitnessReserve = 0;
+    double fitnessStackSize = 0;
 
+public:
     double calculateFitness() {
         if (D.D11 == 0) {
             setupDMatrix();
@@ -113,14 +116,17 @@ struct Stack {
             calculateSigmaCrit() / (1.5 * Nx / (static_cast<double>(stackingSequence.size()) * plyThickness)));
         const double RF_shear = std::abs(calculateTauCrit() / (1.5 * Tau));
         const double RF = 1 / (1 / RF_biax + 1 / RF_shear * 1 / RF_shear);
-        fitness = 1.0 / std::abs((1 - RF));
+        fitnessReserve = 1.0 / std::abs((1 - RF));
+        fitnessStackSize = 1.0 / (stackingSequence.size() * 100000);
         if (RF < 1) {
-            fitness = 0;
+            fitnessReserve = 0;
         }
+        fitness = fitnessReserve * fitnessReserve;
         return fitness;
     }
 
 private:
+
     void setupDMatrix() {
         // Calculate the D-Matrix
         for (int i = static_cast<int>(stackingSequence.size()); i > 0; i--) {
@@ -211,7 +217,7 @@ bool checkStackValidity(const std::pmr::vector<PlyOrientation> &stack) {
     }
     for (const auto &size: orientationSize) {
         if (size.second < 0.1) {
-            std::cout << "Stack has a ply with ply share strictly less than 10%. It will be ignored." << std::endl;
+            // std::cout << "Stack has a ply with ply share strictly less than 10%. It will be ignored." << std::endl;
             return false;
         }
     }
@@ -309,7 +315,7 @@ int main() {
     std::cout << "OPTIMIZER STARTED..." << std::endl;
 
     std::cout << "Step 1: Generating population..." << std::endl;
-    std::pmr::vector<Stack> population = generatePopulation(100, 20);
+    std::pmr::vector<Stack> population = generatePopulation(10000, 200);
 
     bool converged = false;
 
@@ -342,9 +348,9 @@ int main() {
 
     std::cout << "Found following Solution: " << std::endl;
 
-    std::cout << "  RF: " << 1 / population[0].fitness + 1 << std::endl;
+    std::cout << "  RF: " << 1 / population[0].fitnessReserve + 1 << std::endl;
     std::cout << "  Fitness: " << population[0].fitness << std::endl;
-    std::cout << "  Stack Size: " << population[0].stackingSequence.size() << std::endl;
+    std::cout << "  Stack Size: " << 2 * population[0].stackingSequence.size() << std::endl;
     std::cout << "  Stacking Sequence: " << std::endl;
     for (const PlyOrientation ply: population[0].stackingSequence) {
         std::string plyOrientation = plyOrientationToString(ply);
