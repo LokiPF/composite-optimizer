@@ -2,6 +2,7 @@
 // Created by phili on 23.08.2024.
 //
 
+#include <chrono>
 #include <iostream>
 #include <random>
 #include <unordered_map>
@@ -9,22 +10,34 @@
 #include <cmath>
 #include <valarray>
 
+// Step 1: Insert custom values here. There are no constraints.
+
+// Dimensions [mm]
 double a = 400.0;
 double b = 150.0;
-
-double Nx = -1200;
-double Ny = -800;
-double Tau = 800;
-
 double plyThickness = 0.184;
 
+// Force per width [kN/mm]
+double Nx = -0.5;
+double Ny = 0.2;
+double Tau = 0.1;
+
+// Material Properties [MPa]
 double E1 = 130000;
 double E2 = 10000;
 double G12 = 5000;
 
 double nu12 = 0.3;
 
+// Constants
 double PI = 3.14159;
+
+// Optimization Parameters
+double RF_weight = 1;
+double size_weight = 100000;
+int initial_population = 10000;
+int initial_max_stack_size = 200;
+bool fillPopulation = false;
 
 // Necessary Structs
 struct QMatrix {
@@ -116,17 +129,22 @@ public:
             calculateSigmaCrit() / (1.5 * Nx / (static_cast<double>(stackingSequence.size()) * plyThickness)));
         const double RF_shear = std::abs(calculateTauCrit() / (1.5 * Tau));
         const double RF = 1 / (1 / RF_biax + 1 / RF_shear * 1 / RF_shear);
-        fitnessReserve = 1.0 / std::abs((1 - RF));
-        fitnessStackSize = 1.0 / (stackingSequence.size() * 100000);
+        if (std::isinf(RF)) {
+            std::cout << "WARNING: Encountered 0 in denominator." << std::endl;
+            fitness = -1;
+            return fitness;
+        }
+        fitnessReserve = 1.0 / (std::abs((1 - RF)) * RF_weight);
+        fitnessStackSize = 1.0 / (static_cast<double>(stackingSequence.size()) * size_weight);
         if (RF < 1) {
-            fitnessReserve = 0;
+            fitness = -1;
+            return fitness;
         }
         fitness = fitnessReserve * fitnessReserve;
         return fitness;
     }
 
 private:
-
     void setupDMatrix() {
         // Calculate the D-Matrix
         for (int i = static_cast<int>(stackingSequence.size()); i > 0; i--) {
@@ -139,7 +157,7 @@ private:
         }
     }
 
-    double calculateTauCrit() const {
+    [[nodiscard]] double calculateTauCrit() const {
         const double stiffness_ratio = std::sqrt(D.D11 * D.D22) / (D.D12 + 2 * D.D66);
         if (stiffness_ratio >= 1) {
             return 4 / (static_cast<double>(stackingSequence.size()) * plyThickness * b * b) * (
@@ -152,7 +170,7 @@ private:
     }
 
 
-    double calculateSigmaCrit() {
+    [[nodiscard]] double calculateSigmaCrit() const {
         double sCrit = 0;
         bool flag = false;
         int m = 1;
@@ -257,12 +275,12 @@ Stack generateStack(int size) {
     return s;
 }
 
-std::pmr::vector<Stack> generatePopulation(const int size, const int maxPlySize) {
+std::pmr::vector<Stack> generatePopulation(const int size, const int maxStackSize, const int minStackSize = 1) {
     std::pmr::vector<Stack> population;
 
     std::random_device dev;
     std::mt19937 gen(dev());
-    std::uniform_int_distribution<> dist(1, maxPlySize);
+    std::uniform_int_distribution<> dist(minStackSize, maxStackSize);
 
     for (int i = 0; i < size; i++) {
         population.push_back(generateStack(dist(gen)));
@@ -310,21 +328,29 @@ std::string plyOrientationToString(PlyOrientation ply_orientation) {
 }
 
 int main() {
+    auto start = std::chrono::high_resolution_clock::now();
     initialCalculations();
 
     std::cout << "OPTIMIZER STARTED..." << std::endl;
 
     std::cout << "Step 1: Generating population..." << std::endl;
-    std::pmr::vector<Stack> population = generatePopulation(10000, 200);
+    std::pmr::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
 
-    bool converged = false;
+    bool converged = true;
+    double convergenceMeasure = 1;
+    std::pair<float, float> fitnessBefore = {0, 0};
 
-    while (!converged) {
-        std::cout << "Step 2: Selecting best 15%..." << std::endl;
+    while (convergenceMeasure >= 0) {
+        std::cout << "Step 2: Selecting best 30%..." << std::endl;
         std::sort(population.begin(), population.end(),
                   [](const Stack &lhs, const Stack &rhs) {
                       return lhs.fitness > rhs.fitness;
                   });
+        if (population[0].fitnessReserve != -1) {
+            convergenceMeasure = population[0].fitnessReserve - fitnessBefore.first + population[0].fitnessStackSize -
+                                 fitnessBefore.second;
+        }
+        fitnessBefore = {population[0].fitnessReserve, population[0].fitnessStackSize};
         auto top = static_cast<size_t>(0.3 * static_cast<int>(population.size()));
         std::pmr::vector<Stack> elite;
         for (int i = 0; i < top; i++) {
@@ -333,20 +359,45 @@ int main() {
 
         population = elite;
         if (population.size() <= 7) {
-            converged = true;
+            converged = false;
             break;
         }
-        std::cout << "Step 3: Starting crossover..." << std::endl;
+        std::cout << "Step 3: Starting Elite crossover..." << std::endl;
         for (int i = 0; i < elite.size() - 1; i += 2) {
             auto [son, daughter] = crossover(elite[i], elite[i + 1]);
             population.push_back(son);
             population.push_back(daughter);
         }
+        std::cout << "Step 4: Starting Population crossover..." << std::endl;
+        int size = static_cast<int>(population.size() / 2);
+        for (int i = 0; i < size; i += 2) {
+            auto [son, daughter] = crossover(population[i], population[size - 1 - i]);
+            population.push_back(son);
+            population.push_back(daughter);
+        }
+        if (fillPopulation) {
+            std::cout << "Step 5: Filling Population..." << std::endl;
+            std::pmr::vector<Stack> fillPopulation = generatePopulation(
+                static_cast<int>(initial_population - population.size()),
+                static_cast<int>(elite[1].stackingSequence.size()), static_cast<int>(elite[0].stackingSequence.size()));
+            population.insert(population.end(), fillPopulation.begin(), fillPopulation.end());
+        }
     }
 
-    std::cout << "Step 4: Converged!" << std::endl;
-
+    // Finished
+    auto stop = std::chrono::high_resolution_clock::now();
+    if (converged) {
+        std::cout << "--- Converged! ---" << std::endl;
+    } else {
+        std::cout << "--- Optimizer finished before completion. ---" << std::endl;
+    }
+    std::cout << "Number of solutions: " << population.size() << std::endl;
     std::cout << "Found following Solution: " << std::endl;
+
+    std::sort(population.begin(), population.end(),
+              [](const Stack &lhs, const Stack &rhs) {
+                  return lhs.stackingSequence.size() < rhs.stackingSequence.size();
+              });
 
     std::cout << "  RF: " << 1 / population[0].fitnessReserve + 1 << std::endl;
     std::cout << "  Fitness: " << population[0].fitness << std::endl;
@@ -356,7 +407,9 @@ int main() {
         std::string plyOrientation = plyOrientationToString(ply);
         std::cout << "      " << plyOrientation << std::endl;
     }
-
+    std::cout << "  --- Mid Plane --- " << std::endl;
+    std::cout << "\n\nTime taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() <<
+            "ms" << std::endl;
 
     return 0;
 }
