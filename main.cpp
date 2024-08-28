@@ -13,14 +13,14 @@
 // Step 1: Insert custom values here. There are no constraints.
 
 // Dimensions [mm]
-double a = 400.0;
-double b = 150.0;
+double a = 800.0;
+double b = 400.0;
 double plyThickness = 0.184;
 
 // Force per width [kN/mm]
-double Nx = -0.5;
-double Ny = 0.2;
-double Tau = 0.1;
+double Nx = -0.2 * 10 * 10 * 10;
+double Ny = -0.01 * 10 * 10 * 10;
+double Tau = 0.1 * 10 * 10 * 10;
 
 // Material Properties [MPa]
 double E1 = 130000;
@@ -36,8 +36,8 @@ double PI = 3.14159;
 double RF_weight = 1;
 double size_weight = 100000;
 int initial_population = 10000;
-int initial_max_stack_size = 200;
-bool fillPopulation = false;
+int initial_max_stack_size = 2000;
+bool fillPopulation = true;
 
 // Necessary Structs
 struct QMatrix {
@@ -126,8 +126,8 @@ public:
             setupDMatrix();
         }
         const double RF_biax = std::abs(
-            calculateSigmaCrit() / (1.5 * Nx / (static_cast<double>(stackingSequence.size()) * plyThickness)));
-        const double RF_shear = std::abs(calculateTauCrit() / (1.5 * Tau));
+            calculateSigmaCrit() / (1.5 * Nx / (2 * static_cast<double>(stackingSequence.size()) * plyThickness)));
+        const double RF_shear = std::abs(calculateTauCrit() / (1.5 * (Tau / (2 * static_cast<double>(stackingSequence.size()) * plyThickness))));
         const double RF = 1 / (1 / RF_biax + 1 / RF_shear * 1 / RF_shear);
         if (std::isinf(RF)) {
             std::cout << "WARNING: Encountered 0 in denominator." << std::endl;
@@ -160,29 +160,31 @@ private:
     [[nodiscard]] double calculateTauCrit() const {
         const double stiffness_ratio = std::sqrt(D.D11 * D.D22) / (D.D12 + 2 * D.D66);
         if (stiffness_ratio >= 1) {
-            return 4 / (static_cast<double>(stackingSequence.size()) * plyThickness * b * b) * (
+            return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
                        std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * (
                            8.12 + 5.05 / stiffness_ratio));
         }
-        return 4 / (static_cast<double>(stackingSequence.size()) * plyThickness * b * b) * (
+        return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
                    sqrt(D.D22 * (D.D12 + 2 * D.D66)) * (
                        11.7 + 0.532 * stiffness_ratio + 0.938 * stiffness_ratio * stiffness_ratio));
     }
 
 
     [[nodiscard]] double calculateSigmaCrit() const {
-        double sCrit = 0;
+        double sCritM = 0;
+        double sCritN = 0;
         bool flag = false;
         int m = 1;
         int n = 1;
+        double _ =sigmaCrit(2, 1);
         while (true) {
             double _ = sigmaCrit(m, 1);
             if (!flag) {
-                sCrit = _;
+                sCritM = _;
                 flag = true;
             } else {
-                if (_ < std::abs(sCrit)) {
-                    sCrit = _;
+                if (_ < std::abs(sCritM)) {
+                    sCritM = _;
                 } else break;
             }
             m++;
@@ -191,22 +193,25 @@ private:
         while (true) {
             double _ = sigmaCrit(1, n);
             if (!flag) {
-                sCrit = _;
+                sCritN = _;
                 flag = true;
             } else {
-                if (std::abs(_) < std::abs(sCrit)) {
-                    sCrit = _;
+                if (std::abs(_) < std::abs(sCritN)) {
+                    sCritN = _;
                 } else break;
             }
             n++;
         }
-        return sCrit;
+        if (sCritM < sCritN) {
+            return sCritM;
+        }
+        return sCritN;
     }
 
     [[nodiscard]] double sigmaCrit(const int m, const int n) const {
         double alpha = a / b;
         double beta = Ny / Nx;
-        return PI * PI / (b * b * static_cast<double>(stackingSequence.size()) * plyThickness) * 1 / (
+        return PI * PI / (b * b * 2 * static_cast<double>(stackingSequence.size()) * plyThickness) * 1 / (
                    (m / alpha) * (m / alpha) + beta * n * n) * (
                    D.D11 * (m / alpha) * (m / alpha) * (m / alpha) * (m / alpha) + 2 * (D.D12 + D.D66) * (m * n / alpha)
                    * (m * n / alpha) + D.D22 * n * n * n * n);
@@ -330,6 +335,9 @@ std::string plyOrientationToString(PlyOrientation ply_orientation) {
 int main() {
     auto start = std::chrono::high_resolution_clock::now();
     initialCalculations();
+
+    Stack stack = Stack{std::pmr::vector<PlyOrientation>{ANGLE_PLUS_45, ANGLE_PLUS_45, ANGLE_MINUS_45, ANGLE_MINUS_45, ANGLE_0, ANGLE_0, ANGLE_90}};
+    stack.calculateFitness();
 
     std::cout << "OPTIMIZER STARTED..." << std::endl;
 
