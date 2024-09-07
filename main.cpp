@@ -37,7 +37,7 @@ double RF_weight = 1;
 double size_weight = 100000;
 int initial_population = 10000;
 int initial_max_stack_size = 2000;
-bool fillPopulation = true;
+bool fillPopulation = false;
 
 // Necessary Structs
 struct QMatrix {
@@ -82,13 +82,16 @@ enum PlyOrientation {
     ANGLE_0,
     ANGLE_PLUS_45,
     ANGLE_MINUS_45,
-    ANGLE_90
+    ANGLE_90,
+    NAN_ANGLE
 };
 
 // Initial Calculations
 double nu21;
 
 QMatrix Q;
+
+std::pmr::unordered_map<PlyOrientation, int> angles;
 
 std::pmr::unordered_map<PlyOrientation, QBarMatrix> QBarMatrices;
 
@@ -116,9 +119,12 @@ struct Stack {
     // The stacking sequence only includes the upper half of the stack due to symmetry
     std::pmr::vector<PlyOrientation> stackingSequence;
     DMatrix D;
+    int stackSize = static_cast<int>(stackingSequence.size() * 2);
     double fitness{};
     double fitnessReserve = 0;
     double fitnessStackSize = 0;
+    double RF = 0;
+    bool sizeFixed = false;
 
 public:
     double calculateFitness() {
@@ -126,16 +132,20 @@ public:
             setupDMatrix();
         }
         const double RF_biax = std::abs(
-            calculateSigmaCrit() / (1.5 * Nx / (2 * static_cast<double>(stackingSequence.size()) * plyThickness)));
-        const double RF_shear = std::abs(calculateTauCrit() / (1.5 * (Tau / (2 * static_cast<double>(stackingSequence.size()) * plyThickness))));
-        const double RF = 1 / (1 / RF_biax + 1 / RF_shear * 1 / RF_shear);
+            calculateSigmaCrit() / (1.5 * Nx / (2 * stackSize * plyThickness)));
+        const double RF_shear = std::abs(calculateTauCrit() / (1.5 * (Tau / (2 * stackSize * plyThickness))));
+        RF = 1 / (1 / RF_biax + 1 / RF_shear * 1 / RF_shear);
+        if (sizeFixed) {
+            fitness = RF;
+            return fitness;
+        }
         if (std::isinf(RF)) {
             std::cout << "WARNING: Encountered 0 in denominator." << std::endl;
             fitness = -1;
             return fitness;
         }
         fitnessReserve = 1.0 / (std::abs((1 - RF)) * RF_weight);
-        fitnessStackSize = 1.0 / (static_cast<double>(stackingSequence.size()) * size_weight);
+        fitnessStackSize = 1.0 / (stackSize * size_weight);
         if (RF < 1) {
             fitness = -1;
             return fitness;
@@ -160,11 +170,11 @@ private:
     [[nodiscard]] double calculateTauCrit() const {
         const double stiffness_ratio = std::sqrt(D.D11 * D.D22) / (D.D12 + 2 * D.D66);
         if (stiffness_ratio >= 1) {
-            return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
+            return 4 / (stackSize * plyThickness * b * b) * (
                        std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * (
                            8.12 + 5.05 / stiffness_ratio));
         }
-        return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
+        return 4 / (stackSize * plyThickness * b * b) * (
                    sqrt(D.D22 * (D.D12 + 2 * D.D66)) * (
                        11.7 + 0.532 * stiffness_ratio + 0.938 * stiffness_ratio * stiffness_ratio));
     }
@@ -176,7 +186,7 @@ private:
         bool flag = false;
         int m = 1;
         int n = 1;
-        double _ =sigmaCrit(2, 1);
+        double _ = sigmaCrit(2, 1);
         while (true) {
             double _ = sigmaCrit(m, 1);
             if (!flag) {
@@ -211,7 +221,7 @@ private:
     [[nodiscard]] double sigmaCrit(const int m, const int n) const {
         double alpha = a / b;
         double beta = Ny / Nx;
-        return PI * PI / (b * b * 2 * static_cast<double>(stackingSequence.size()) * plyThickness) * 1 / (
+        return PI * PI / (b * b * stackSize * plyThickness) * 1 / (
                    (m / alpha) * (m / alpha) + beta * n * n) * (
                    D.D11 * (m / alpha) * (m / alpha) * (m / alpha) * (m / alpha) + 2 * (D.D12 + D.D66) * (m * n / alpha)
                    * (m * n / alpha) + D.D22 * n * n * n * n);
@@ -229,6 +239,12 @@ void initialCalculations() {
         {ANGLE_PLUS_45, QBarMatrix(Q, 45)},
         {ANGLE_MINUS_45, QBarMatrix(Q, -45)},
         {ANGLE_90, QBarMatrix(Q, 90)}
+    };
+    angles = {
+        {ANGLE_0, 0},
+        {ANGLE_PLUS_45, 45},
+        {ANGLE_MINUS_45, -45},
+        {ANGLE_90, 90}
     };
 }
 
@@ -332,17 +348,34 @@ std::string plyOrientationToString(PlyOrientation ply_orientation) {
     return "";
 }
 
-int main() {
-    auto start = std::chrono::high_resolution_clock::now();
-    initialCalculations();
+PlyOrientation getAngle(int angle) {
+    for (const auto &pair: angles) {
+        if (pair.second == angle) {
+            return pair.first;
+        }
+    }
+    return NAN_ANGLE;
+}
 
-    Stack stack = Stack{std::pmr::vector<PlyOrientation>{ANGLE_PLUS_45, ANGLE_PLUS_45, ANGLE_MINUS_45, ANGLE_MINUS_45, ANGLE_0, ANGLE_0, ANGLE_90}};
-    stack.calculateFitness();
+std::pmr::vector<Stack> mutation(std::pmr::vector<Stack> population, const int mutation = 1) {
+    std::random_device rd;
+    std::uniform_int_distribution<> dist(0, static_cast<int>(population.size()));
+    std::uniform_int_distribution<> angle(-mutation, mutation);
+    for (int i = 0; i < population.size(); i++) {
+        for (int j = dist(rd); j < population[0].stackingSequence.size() * dist(rd); i++) {
+            int newAngle = angles.at(population[i].stackingSequence[j]) + angle(rd) * 45;
+            if (std::abs(newAngle) > 90) {
+                newAngle = 0;
+            }
+            population[i].stackingSequence[j] = getAngle(newAngle);
+        }
+    }
+    return population;
+}
 
-    std::cout << "OPTIMIZER STARTED..." << std::endl;
-
+std::pmr::vector<Stack> sizeOptimization(int maxSize=initial_max_stack_size, int minSize=initial_population) {
     std::cout << "Step 1: Generating population..." << std::endl;
-    std::pmr::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
+    std::pmr::vector<Stack> population = generatePopulation(minSize, maxSize);
 
     bool converged = true;
     double convergenceMeasure = 1;
@@ -377,7 +410,7 @@ int main() {
             population.push_back(daughter);
         }
         std::cout << "Step 4: Starting Population crossover..." << std::endl;
-        int size = static_cast<int>(population.size() / 2);
+        int size = static_cast<int>(population.size() / 2) - 1;
         for (int i = 0; i < size; i += 2) {
             auto [son, daughter] = crossover(population[i], population[size - 1 - i]);
             population.push_back(son);
@@ -391,14 +424,78 @@ int main() {
             population.insert(population.end(), fillPopulation.begin(), fillPopulation.end());
         }
     }
-
-    // Finished
-    auto stop = std::chrono::high_resolution_clock::now();
     if (converged) {
         std::cout << "--- Converged! ---" << std::endl;
     } else {
         std::cout << "--- Optimizer finished before completion. ---" << std::endl;
     }
+    return population;
+}
+
+std::pmr::vector<Stack> sizeOptimizationFixedSize(int size) {
+    std::cout << "Step 1: Generating population..." << std::endl;
+    std::pmr::vector<Stack> population = generatePopulation(initial_population, size);
+
+    bool converged = true;
+    double convergenceMeasure = 1;
+    std::pair<float, float> fitnessBefore = {0, 0};
+
+
+    while(convergenceMeasure >= 0) {
+        std::cout << "Step 2: Selecting best 30%..." << std::endl;
+        std::sort(population.begin(), population.end(),
+                  [](const Stack &lhs, const Stack &rhs) {
+                      return lhs.fitness > rhs.fitness;
+                  });
+        if (population[0].fitnessReserve != -1) {
+            convergenceMeasure = population[0].fitnessReserve - fitnessBefore.first + population[0].fitnessStackSize -
+                                 fitnessBefore.second;
+        }
+        fitnessBefore = {population[0].fitnessReserve, population[0].fitnessStackSize};
+        auto top = static_cast<size_t>(0.3 * static_cast<int>(population.size()));
+        std::pmr::vector<Stack> elite;
+        for (int i = 0; i < top; i++) {
+            elite.push_back(population[i]);
+        }
+
+        population = elite;
+        if (population.size() <= 7) {
+            converged = false;
+            break;
+        }
+        population = mutation(population);
+        if (fillPopulation) {
+            std::pmr::vector<Stack> fillPopulation = generatePopulation(
+                static_cast<int>(initial_population - population.size()),
+                static_cast<int>(elite[1].stackingSequence.size()), static_cast<int>(elite[0].stackingSequence.size()));
+            population.insert(population.end(), fillPopulation.begin(), fillPopulation.end());
+        }
+    }
+    return population;
+}
+
+int main() {
+    const auto start = std::chrono::high_resolution_clock::now();
+    initialCalculations();
+
+    auto stack = Stack{
+        std::pmr::vector<PlyOrientation>{
+            ANGLE_PLUS_45, ANGLE_PLUS_45, ANGLE_MINUS_45, ANGLE_MINUS_45, ANGLE_0, ANGLE_0, ANGLE_90
+        }
+    };
+    stack.calculateFitness();
+
+    std::cout << "OPTIMIZER STARTED..." << std::endl;
+
+    std::pmr::vector<Stack> population = sizeOptimization();
+
+    population = sizeOptimization(population.size(), population.size());
+
+    population = sizeOptimizationFixedSize(population.size());
+
+    // Finished
+    const auto stop = std::chrono::high_resolution_clock::now();
+
     std::cout << "Number of solutions: " << population.size() << std::endl;
     std::cout << "Found following Solution: " << std::endl;
 
