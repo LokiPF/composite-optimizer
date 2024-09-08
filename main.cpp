@@ -132,6 +132,7 @@ struct Stack {
 
 public:
     double calculateFitness() {
+        stackSize = stackingSequence.size();
         if (D.D11 == 0) {
             setupDMatrix();
         }
@@ -532,23 +533,6 @@ int main() {
     };
     stack.calculateFitness();
 
-std::pmr::vector<Stack> mutation(std::pmr::vector<Stack> population, const int mutation = 1) {
-    std::random_device rd;
-    std::uniform_int_distribution<> dist(0, static_cast<int>(population.size()));
-    std::uniform_int_distribution<> angle(-mutation, mutation);
-    for (int i = 0; i < population.size(); i++) {
-        for (int j = dist(rd); j < population[0].stackingSequence.size() * dist(rd); i++) {
-            int newAngle = angles.at(population[i].stackingSequence[j]) + angle(rd) * 45;
-            if (std::abs(newAngle) > 90) {
-                newAngle = 0;
-            }
-            population[i].stackingSequence[j] = getAngle(newAngle);
-        }
-    }
-    return population;
-}
-
-std::pmr::vector<Stack> sizeOptimization(int maxSize=initial_max_stack_size, int minSize=initial_population) {
     std::cout << "Step 1: Generating population..." << std::endl;
     std::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
 
