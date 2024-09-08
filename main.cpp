@@ -120,6 +120,7 @@ struct Stack {
     // The stacking sequence only includes the upper half of the stack due to symmetry
     std::vector<PlyOrientation> stackingSequence;
     DMatrix D;
+    int stackSize = static_cast<int>(stackingSequence.size() * 2);
     double fitness{};
     double fitnessReserve = 0;
     double fitnessStackSize = 0;
@@ -145,7 +146,7 @@ public:
             return fitness;
         }
         fitnessReserve = 1.0 / (std::abs((1 - RF)) * RF_weight);
-        fitnessStackSize = 1.0 / (static_cast<double>(stackingSequence.size()) * size_weight);
+        fitnessStackSize = 1.0 / (stackSize * size_weight);
         if (RF < 1) {
             rank = 999;
             fitness = -1;
@@ -171,11 +172,11 @@ private:
     [[nodiscard]] double calculateTauCrit() const {
         const double stiffness_ratio = std::sqrt(D.D11 * D.D22) / (D.D12 + 2 * D.D66);
         if (stiffness_ratio >= 1) {
-            return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
+            return 4 / (stackSize * plyThickness * b * b) * (
                        std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * std::sqrt(D.D11 * D.D22 * D.D22 * D.D22) * (
                            8.12 + 5.05 / stiffness_ratio));
         }
-        return 4 / (static_cast<double>(stackingSequence.size()) * 2 * plyThickness * b * b) * (
+        return 4 / (stackSize * plyThickness * b * b) * (
                    sqrt(D.D22 * (D.D12 + 2 * D.D66)) * (
                        11.7 + 0.532 * stiffness_ratio + 0.938 * stiffness_ratio * stiffness_ratio));
     }
@@ -222,7 +223,7 @@ private:
     [[nodiscard]] double sigmaCrit(const int m, const int n) const {
         double alpha = a / b;
         double beta = Ny / Nx;
-        return PI * PI / (b * b * 2 * static_cast<double>(stackingSequence.size()) * plyThickness) * 1 / (
+        return PI * PI / (b * b * stackSize * plyThickness) * 1 / (
                    (m / alpha) * (m / alpha) + beta * n * n) * (
                    D.D11 * (m / alpha) * (m / alpha) * (m / alpha) * (m / alpha) + 2 * (D.D12 + D.D66) * (m * n / alpha)
                    * (m * n / alpha) + D.D22 * n * n * n * n);
@@ -531,8 +532,23 @@ int main() {
     };
     stack.calculateFitness();
 
-    std::cout << "OPTIMIZER STARTED..." << std::endl;
+std::pmr::vector<Stack> mutation(std::pmr::vector<Stack> population, const int mutation = 1) {
+    std::random_device rd;
+    std::uniform_int_distribution<> dist(0, static_cast<int>(population.size()));
+    std::uniform_int_distribution<> angle(-mutation, mutation);
+    for (int i = 0; i < population.size(); i++) {
+        for (int j = dist(rd); j < population[0].stackingSequence.size() * dist(rd); i++) {
+            int newAngle = angles.at(population[i].stackingSequence[j]) + angle(rd) * 45;
+            if (std::abs(newAngle) > 90) {
+                newAngle = 0;
+            }
+            population[i].stackingSequence[j] = getAngle(newAngle);
+        }
+    }
+    return population;
+}
 
+std::pmr::vector<Stack> sizeOptimization(int maxSize=initial_max_stack_size, int minSize=initial_population) {
     std::cout << "Step 1: Generating population..." << std::endl;
     std::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
 
@@ -545,6 +561,7 @@ int main() {
     // } else {
     //     std::cout << "--- Optimizer finished before completion. ---" << std::endl;
     // }
+
     std::cout << "Number of solutions: " << population.size() << std::endl;
     std::cout << "Found following Solution: " << std::endl;
 

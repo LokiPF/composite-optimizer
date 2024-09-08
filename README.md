@@ -2,10 +2,12 @@
 
 Part of the ASE student challenge.
 
-## _1. Set own values_
+**No extra libraries are necessary.**
 
-Directly below the imports in [main.cpp](main.cpp) one can change the optimizer options.
-Large forces will work however, due to large stack sizes and more possible combinations the variance in the output will
+## _1. Set your values_
+
+Directly below the imports in [main.cpp](main.cpp), one can change the optimizer options.
+Large forces will work; however, due to large stack sizes and more possible combinations, the variance in the output will
 be larger.
 
 ```
@@ -31,11 +33,11 @@ double nu12 = 0.3;
 
 ## _2. Set up optimizer parameters_
 
-These are the standard values. Several tests have shown that these parameters will lead to good results for large and
-small stacks. In rare occasions these values can be adapted. Should the optimizer not stop with the flag _---
+These are the standard values. Several tests have shown that these parameters yield good results for large and
+small stacks. On rare occasions, these values can be adapted. Should the optimizer not stop with the flag _---
 Converged! ---_ either the _initial population_ or the _fillPopulation_ values should be changed. This will have a penalty
 on the runtime. The _fillPopulation_ option will ensure that the population size is not reduced and only the implemented
-convergence measure leads to convergence. This has a large effect on the run time.
+convergence measure leads to convergence. This has a significant effect on the run time.
 
 ```
 // Optimization Parameters
