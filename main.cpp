@@ -36,7 +36,7 @@ double PI = 3.14159;
 // Optimization Parameters
 double RF_weight = 1;
 double size_weight = 100000;
-int initial_population = 10;
+int initial_population = 15;
 int initial_max_stack_size = 50;
 bool fillPopulation = true;
 
@@ -149,7 +149,7 @@ public:
         fitnessReserve = 1.0 / (std::abs((1 - RF)) * RF_weight);
         fitnessStackSize = 1.0 / (stackSize * size_weight);
         if (RF < 1) {
-            rank = 999;
+            rank = 2;
             fitness = -1;
             return fitness;
         }
@@ -359,8 +359,9 @@ bool isDominant(const Stack &lhs, const Stack &rhs) {
 }
 
 std::vector<std::vector<Stack> > fast_non_dominated_sort(std::vector<Stack> &population) {
-    std::vector<std::vector<Stack>> Fronts = {{}};
+    std::vector<std::vector<Stack> > Fronts = {{}};
     for (int p = 0; p < population.size(); p++) {
+        population[p].solutions = {};
         for (int q = 0; q < population.size(); q++) {
             if (p == q) continue;
             if (isDominant(population[p], population[q])) {
@@ -379,14 +380,14 @@ std::vector<std::vector<Stack> > fast_non_dominated_sort(std::vector<Stack> &pop
     int front = 0;
     while (!Fronts[front].empty()) {
         std::vector<Stack> Q = {};
-        // for (int p = 0; p < Fronts[front].size(); p++) {
-        for (Stack q: Fronts[front]) {
-            q.domination--;
-            if (q.domination == 0) {
-                q.rank = front + 2;
-                Q.push_back(q);
+        for (int p = 0; p < Fronts[front].size(); p++) {
+            for (Stack q: population[p].solutions) {
+                q.domination--;
+                if (q.domination == 0) {
+                    q.rank = front + 1;
+                    Q.push_back(q);
+                }
             }
-            // }
         }
         front++;
         Fronts.push_back(Q);
@@ -413,8 +414,8 @@ void crowding_distance_assignment(std::vector<Stack> population) {
               });
     population[0].crowdingDistance = population[l - 1].crowdingDistance = std::numeric_limits<double>::infinity();
     for (int i = 1; i < l - 1; i++) {
-        population[i].crowdingDistance += (population[i + 1].fitnessStackSize - population[i - 1].fitnessStackSize) / (
-            population[0].fitnessStackSize - population[l - 1].fitnessStackSize);
+        population[i].crowdingDistance += (population[i + 1].fitnessReserve - population[i - 1].fitnessReserve) / (
+            population[0].fitnessReserve - population[l - 1].fitnessReserve);
     }
 }
 
@@ -425,7 +426,7 @@ bool crowded_comparison_operator(const Stack &i, const Stack &j) {
 Stack tournament_selection(std::vector<Stack> population) {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dist(0, static_cast<int>(population.size() - 1));
+    std::uniform_int_distribution<> dist(1, static_cast<int>(population.size() - 1));
 
     Stack contastent1 = population[dist(gen)];
     Stack contastent2 = population[dist(gen)];
@@ -465,7 +466,8 @@ void mutation(Stack &offspring, const int mutation = 1) {
         return;
     }
     Stack addon = generateStack(size + 1);
-    offspring.stackingSequence.insert(offspring.stackingSequence.end(), addon.stackingSequence.begin(), addon.stackingSequence.end());
+    offspring.stackingSequence.insert(offspring.stackingSequence.end(), addon.stackingSequence.begin(),
+                                      addon.stackingSequence.end());
 }
 
 std::vector<Stack> make_new_pop(std::vector<Stack> population) {
@@ -491,12 +493,12 @@ void NSGA2(std::vector<Stack> &Pt, int N, int generations) {
     std::vector<Stack> Qt;
     int t = 0;
     while (t < generations) {
-        if (t % 100 == 0)
+        if (t % 1 == 0)
             std::cout << t << std::endl;
         std::vector<Stack> Rt = Pt;
         Rt.insert(Rt.end(), Qt.begin(), Qt.end());
 
-        std::vector<std::vector<Stack> > F = fast_non_dominated_sort(Rt);
+        std::vector<std::vector<Stack>> F = fast_non_dominated_sort(Rt); // non-dominant fronts
 
         std::vector<Stack> Pt_1 = {};
         int i = 0;
@@ -523,20 +525,13 @@ void NSGA2(std::vector<Stack> &Pt, int N, int generations) {
 
 
 int main() {
-    auto start = std::chrono::high_resolution_clock::now();
+    const auto start = std::chrono::high_resolution_clock::now();
     initialCalculations();
-
-    Stack stack = Stack{
-        std::vector<PlyOrientation>{
-            ANGLE_PLUS_45, ANGLE_PLUS_45, ANGLE_MINUS_45, ANGLE_MINUS_45, ANGLE_0, ANGLE_0, ANGLE_90
-        }
-    };
-    stack.calculateFitness();
 
     std::cout << "Step 1: Generating population..." << std::endl;
     std::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
 
-    NSGA2(population, population.size(), 400);
+    NSGA2(population, population.size(), 5000);
 
     // Finished
     auto stop = std::chrono::high_resolution_clock::now();
@@ -551,24 +546,34 @@ int main() {
 
     std::sort(population.begin(), population.end(),
               [](const Stack &lhs, const Stack &rhs) {
-                  return lhs.stackingSequence.size() < rhs.stackingSequence.size();
+                  return lhs.rank < rhs.rank;
               });
 
-    for (Stack s : population) {
-        s.calculateFitness();
-        std::cout << "  RF: " << s.RF << std::endl;
-        std::cout << "  Fitness: " << s.rank << std::endl;
-        std::cout << "  Stack Size: " << 2 * s.stackingSequence.size() << std::endl;
-        std::cout << "  Stacking Sequence: " << std::endl;
-        for (const PlyOrientation ply: s.stackingSequence) {
-            std::string plyOrientation = plyOrientationToString(ply);
-            std::cout << "      " << plyOrientation << std::endl;
-        }
-        std::cout << "  --- Mid Plane --- " << std::endl;
+    population[0].calculateFitness();
+    std::cout << "  RF: " << population[0].RF << std::endl;
+    std::cout << "  Rank: " << population[0].rank << std::endl;
+    std::cout << "  Stack Size: " << 2 * population[0].stackingSequence.size() << std::endl;
+    std::cout << "  Stacking Sequence: " << std::endl;
+    for (const PlyOrientation ply: population[0].stackingSequence) {
+        std::string plyOrientation = plyOrientationToString(ply);
+        std::cout << "      " << plyOrientation << std::endl;
     }
+    std::cout << "  --- Mid Plane --- " << std::endl;
+    // for (Stack s: population) {
+    //     s.calculateFitness();
+    //     std::cout << "  RF: " << s.RF << std::endl;
+    //     std::cout << "  Fitness: " << s.rank << std::endl;
+    //     std::cout << "  Stack Size: " << 2 * s.stackingSequence.size() << std::endl;
+    //     std::cout << "  Stacking Sequence: " << std::endl;
+    //     for (const PlyOrientation ply: s.stackingSequence) {
+    //         std::string plyOrientation = plyOrientationToString(ply);
+    //         std::cout << "      " << plyOrientation << std::endl;
+    //     }
+    //     std::cout << "  --- Mid Plane --- " << std::endl;
+    // }
 
     std::cout << "\n\nTime taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() <<
-                "ms" << std::endl;
+            "ms" << std::endl;
 
     return 0;
 }
