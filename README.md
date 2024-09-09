@@ -13,14 +13,13 @@ _multi-objective evolutionary algorithms (MOEAs)_.
    size.
 2. NSGAII algorithm: based on the reserve factor (strength measure) and stack size (mass) the best stacks are selected
    using a mix of tournament and elite selection. Crossover and adaptive mutation ensures a large diversity in the
-   beginning and a smaller diversity in the end. The non-dominated fronts function sorts the population into Pareto
-   fronts and ensure diversity through crowding distance. This ensures that not only one objective is fulfilled.
+   beginning and a smaller diversity in the end. The population is divided into Pareto fronts based on dominance, and crowding distance ensures that the population is spread out across the objective space. This         prevents the algorithm from optimizing only one objective at the expense of the other.
 
-3. Convergence: Optimally the GA finds the Pareto front in which further mutations will decrease one objective while
-   increasing another objective. This however cannot always be ensured. Using the hypervolume of the Pareto front, the
-   algorithm can then converge. If the hypervolume improvement falls below a certain threshold over a number of
+3. Convergence: Optimally, the GA finds the Pareto front in which further mutations will decrease one objective while
+   increasing another. This, however, cannot always be ensured. Using the hypervolume of the Pareto front, the
+   algorithm can then converge. If the hypervolume improvement falls below a certain threshold over several
    generations, the GA is said to be converged.
-4. Output: In the end either all found solutions are being output or only the best one found over several runs.
+4. Output: In the end, all the solutions found are being output or only the best one is seen over several runs.
 
 
 ## _1. Set your values_
