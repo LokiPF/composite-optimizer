@@ -19,9 +19,9 @@ double b = 400.0;
 double plyThickness = 0.184;
 
 // Force per width [kN/mm]
-double Nx = -0.2 * 10 * 10 * 10;
-double Ny = -0.01 * 10 * 10 * 10;
-double Tau = 0.1 * 10 * 10 * 10;
+double Nx = -0.3;
+double Ny = -0.01;
+double Tau = 0.1;
 
 // Material Properties [MPa]
 double E1 = 130000;
@@ -33,12 +33,27 @@ double nu12 = 0.3;
 // Constants
 double PI = 3.14159;
 
-// Optimization Parameters
-double RF_weight = 1;
-double size_weight = 100000;
-int initial_population = 15;
-int initial_max_stack_size = 50;
-bool fillPopulation = true;
+// Step 2: Adapt optimization parameters if necessary.
+
+// Initial Parameters
+int initial_population = 150;
+double initial_max_stack_size = 50;
+
+// Mutation Parameters
+double initial_mutation_rate = 0.3;
+int stack_size_variability = 2;
+
+// Consistent Measures
+constexpr int runs = 10;
+
+// Output
+bool show_all_solutions = false;
+
+
+/*
+ *      Code starts here. No changes necessary.
+ */
+
 
 // Necessary Structs
 struct QMatrix {
@@ -132,7 +147,7 @@ struct Stack {
 
 public:
     double calculateFitness() {
-        stackSize = stackingSequence.size();
+        stackSize = static_cast<int>(stackingSequence.size());
         if (D.D11 == 0) {
             setupDMatrix();
         }
@@ -146,10 +161,10 @@ public:
             fitness = -1;
             return fitness;
         }
-        fitnessReserve = 1.0 / (std::abs((1 - RF)) * RF_weight);
-        fitnessStackSize = 1.0 / (stackSize * size_weight);
+        fitnessReserve = RF; // 1.0 / (std::abs((1 - RF)) * RF_weight);
+        fitnessStackSize = 1.0 / stackSize;
         if (RF < 1) {
-            rank = 2;
+            rank = 999;
             fitness = -1;
             return fitness;
         }
@@ -233,6 +248,10 @@ private:
 
 void initialCalculations() {
     // Initial Calculations
+    Nx *= 1000;
+    Ny *= 1000;
+    Tau *= 1000;
+
     nu21 = nu12 * E2 / E1;
 
     Q = {E1 / (1 - nu12 * nu21), E2 / (1 - nu12 * nu21), nu12 * E2 / (1 - nu12 * nu21), G12};
@@ -254,12 +273,12 @@ void initialCalculations() {
 
 bool checkStackValidity(const std::vector<PlyOrientation> &stack) {
     std::unordered_map<PlyOrientation, double> orientationSize;
-    int stackSize = static_cast<double>(stack.size());
+    const int stackSize = static_cast<double>(stack.size());
     for (PlyOrientation ply: stack) {
         orientationSize[ply] += 1.0 / (2 * stackSize);
     }
-    for (const auto &size: orientationSize) {
-        if (size.second < 0.1) {
+    for (const auto &[fst, snd]: orientationSize) {
+        if (snd < 0.1) {
             // std::cout << "Stack has a ply with ply share strictly less than 10%. It will be ignored." << std::endl;
             return false;
         }
@@ -278,7 +297,7 @@ Stack generateStack(int size) {
      *  4. given ply thickness
      */
     // Check edge cases
-    if (size <= 0) throw std::runtime_error("Size of stack must be strictly larger than 0");
+    if (size <= 0) size++;//throw std::runtime_error("Size of stack must be strictly larger than 0");
 
     std::vector<PlyOrientation> stack;
     const std::vector<PlyOrientation> orientations = {ANGLE_0, ANGLE_PLUS_45, ANGLE_MINUS_45, ANGLE_90};
@@ -342,12 +361,14 @@ std::pair<Stack, Stack> crossover(const Stack &father, const Stack &mother) {
     return {son, daughter};
 }
 
-std::string plyOrientationToString(PlyOrientation ply_orientation) {
+std::string plyOrientationToString(const PlyOrientation ply_orientation) {
     switch (ply_orientation) {
         case ANGLE_0: return "0°";
         case ANGLE_PLUS_45: return "45°";
         case ANGLE_MINUS_45: return "-45°";
         case ANGLE_90: return "90°";
+        case NAN_ANGLE:
+            break;
     }
     return "";
 }
@@ -396,7 +417,7 @@ std::vector<std::vector<Stack> > fast_non_dominated_sort(std::vector<Stack> &pop
 }
 
 void crowding_distance_assignment(std::vector<Stack> population) {
-    const int l = population.size();
+    const int l = static_cast<int>(population.size());
 
     std::sort(population.begin(), population.end(),
               [](const Stack &lhs, const Stack &rhs) {
@@ -424,6 +445,9 @@ bool crowded_comparison_operator(const Stack &i, const Stack &j) {
 }
 
 Stack tournament_selection(std::vector<Stack> population) {
+    if (population.size() == 1) {
+        return population[0];
+    }
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dist(1, static_cast<int>(population.size() - 1));
@@ -436,43 +460,100 @@ Stack tournament_selection(std::vector<Stack> population) {
 }
 
 PlyOrientation getAngle(int angle) {
-    for (const auto &pair: angles) {
-        if (pair.second == angle) {
-            return pair.first;
+    for (const auto &[fst, snd]: angles) {
+        if (snd == angle) {
+            return fst;
         }
     }
     return NAN_ANGLE;
 }
 
-void mutation(Stack &offspring, const int mutation = 1) {
-    std::random_device rd;
-    std::uniform_real_distribution<> dist(0.1, 1);
-    std::uniform_int_distribution<> angle(-mutation, mutation);
-    int size = offspring.stackingSequence.size() * dist(rd);
-    for (int j = dist(rd); j < size; j++) {
-        int newAngle = angles.at(offspring.stackingSequence[j]) + angle(rd) * 45;
-        if (std::abs(newAngle) > 90) {
-            newAngle = 0;
+bool isBalanced(const std::vector<PlyOrientation>& stackingSequence) {
+    int pos = 0;
+    int neg = 0;
+
+    for (const auto& ply : stackingSequence) {
+        if (ply == ANGLE_PLUS_45) {
+            pos++;
+        } else if (ply == ANGLE_MINUS_45) {
+            neg++;
         }
-        if (newAngle == -90) {
-            newAngle = 90;
-        }
-        offspring.stackingSequence[j] = getAngle(newAngle);
     }
-    size -= dist(rd) * size;
-    offspring.calculateFitness();
-    if (offspring.RF > 1) {
-        offspring.stackingSequence.erase(offspring.stackingSequence.end() - size, offspring.stackingSequence.end());
-        return;
-    }
-    Stack addon = generateStack(size + 1);
-    offspring.stackingSequence.insert(offspring.stackingSequence.end(), addon.stackingSequence.begin(),
-                                      addon.stackingSequence.end());
+    return pos == neg;
 }
 
-std::vector<Stack> make_new_pop(std::vector<Stack> population) {
+double adaptiveMutationRate(int currentGeneration, int maxGenerations) {
+    return initial_mutation_rate * (1 - (static_cast<double>(currentGeneration) / maxGenerations));
+}
+
+
+void mutation(Stack &offspring, int currentGeneration, int maxGenerations, bool enforceBalance = true) {
+    const double mutation_rate = adaptiveMutationRate(currentGeneration, maxGenerations);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    std::uniform_real_distribution<> mutation_dist(0.0, 1.0);
+
+    std::uniform_int_distribution<> angle_dist(0, 3);
+    const std::vector<int> angles = {0, 45, -45, 90};  // Ply orientations
+
+    for (int i = 0; i < offspring.stackingSequence.size(); ++i) {
+        if (mutation_dist(gen) < mutation_rate) {
+            const int new_angle = angles[angle_dist(gen)];
+            offspring.stackingSequence[i] = getAngle(new_angle);
+        }
+    }
+
+    if (mutation_dist(gen) < mutation_rate) {
+        std::uniform_int_distribution<> size_change_dist(-stack_size_variability, stack_size_variability);  // Allow +/-2 plies change
+        const int size_change = size_change_dist(gen);
+
+        if (const int new_size = std::max(1, static_cast<int>(offspring.stackingSequence.size()) + size_change); new_size > offspring.stackingSequence.size()) {
+            for (int j = static_cast<int>(offspring.stackingSequence.size()); j < new_size; ++j) {
+                offspring.stackingSequence.push_back(getAngle(angles[angle_dist(gen)]));
+            }
+        } else if (new_size < offspring.stackingSequence.size()) {
+            offspring.stackingSequence.erase(offspring.stackingSequence.begin() + new_size, offspring.stackingSequence.end());
+        }
+    }
+
+    if (enforceBalance && !isBalanced(offspring.stackingSequence)) {
+        int pos = 0, neg = 0;
+        for (auto& ply : offspring.stackingSequence) {
+            if (ply == ANGLE_PLUS_45) pos++;
+            if (ply == ANGLE_MINUS_45) neg++;
+        }
+
+        while (pos > neg) {
+            if (auto it = std::find(offspring.stackingSequence.begin(), offspring.stackingSequence.end(), ANGLE_PLUS_45); it != offspring.stackingSequence.end()) {
+                *it = ANGLE_MINUS_45;
+                pos--;
+                neg++;
+            }
+        }
+
+        while (neg > pos) {
+            if (auto it = std::find(offspring.stackingSequence.begin(), offspring.stackingSequence.end(), ANGLE_MINUS_45); it != offspring.stackingSequence.end()) {
+                *it = ANGLE_PLUS_45;
+                neg--;
+                pos++;
+            }
+        }
+    }
+    offspring.calculateFitness();
+}
+
+std::vector<Stack> elitism(const std::vector<Stack>& population, int num_elites) {
+    std::vector<Stack> elites = population;
+    std::sort(elites.begin(), elites.end(), crowded_comparison_operator);
+    elites.resize(num_elites);  // Retain the top elites
+    return elites;
+}
+
+std::vector<Stack> make_new_pop(const std::vector<Stack>& population, int t, int generations) {
     std::vector<Stack> new_population;
-    int N = population.size();
+    int N = static_cast<int>(population.size());
 
     while (new_population.size() < N) {
         Stack father = tournament_selection(population);
@@ -480,25 +561,55 @@ std::vector<Stack> make_new_pop(std::vector<Stack> population) {
 
         auto [son, daughter] = crossover(father, mother);
 
-        mutation(son);
-        mutation(daughter);
+        mutation(son, t, generations);
+        mutation(daughter, t, generations);
 
         new_population.push_back(son);
         if (new_population.size() < N) new_population.push_back(daughter);
     }
+    new_population = elitism(new_population, static_cast<int>(static_cast<int>(new_population.size())*0.05));
     return new_population;
 }
 
-void NSGA2(std::vector<Stack> &Pt, int N, int generations) {
+double calculate_hypervolume(const std::vector<Stack> &pareto_front, const std::vector<double> &reference_point) {
+    double hypervolume = 0.0;
+
+    std::vector<Stack> sorted_front = pareto_front;
+    std::sort(sorted_front.begin(), sorted_front.end(), [](const Stack &a, const Stack &b) {
+        return a.fitnessStackSize < b.fitnessStackSize;
+    });
+
+    for (size_t i = 0; i < sorted_front.size(); ++i) {
+        const double stack_size = sorted_front[i].fitnessStackSize;
+        const double RF = sorted_front[i].fitnessReserve;
+
+        const double d_stack_size = reference_point[0] - stack_size;
+        const double d_RF = RF - reference_point[1];
+
+        hypervolume += d_stack_size * d_RF;
+    }
+
+    return hypervolume;
+}
+
+bool has_converged(const std::vector<double> &hypervolume_history, const double threshold = 0.0001, const int window_size = 100) {
+    if (hypervolume_history.size() < window_size) return false;
+
+    const double recent_improvement = (hypervolume_history.back() - hypervolume_history[
+                                           hypervolume_history.size() - window_size]) / hypervolume_history.back();
+    return recent_improvement < threshold;
+}
+
+void NSGA2(std::vector<Stack> &Pt, const int N, const int generations) {
+    std::vector<double> hypervolume_history;
     std::vector<Stack> Qt;
     int t = 0;
     while (t < generations) {
-        if (t % 1 == 0)
-            std::cout << t << std::endl;
+        if (t % 5 == 0) std::cout << "-";
         std::vector<Stack> Rt = Pt;
         Rt.insert(Rt.end(), Qt.begin(), Qt.end());
 
-        std::vector<std::vector<Stack>> F = fast_non_dominated_sort(Rt); // non-dominant fronts
+        std::vector<std::vector<Stack> > F = fast_non_dominated_sort(Rt); // non-dominant fronts
 
         std::vector<Stack> Pt_1 = {};
         int i = 0;
@@ -513,11 +624,18 @@ void NSGA2(std::vector<Stack> &Pt, int N, int generations) {
         }
         std::sort(F[i].begin(), F[i].end(), crowded_comparison_operator);
         if (F[i].size() >= N - Pt_1.size())
-            Pt_1.insert(Pt_1.end(), F[i].begin(), F[i].begin() + (N - Pt_1.size()));
+            Pt_1.insert(Pt_1.end(), F[i].begin(), F[i].begin() + (N - static_cast<int>(Pt_1.size())));
 
-        Qt = make_new_pop(Pt_1);
+        Qt = make_new_pop(Pt_1, t, generations);
 
         Pt = Pt_1;
+
+        double current_hypervolume = calculate_hypervolume(F[0], {16, 1});
+        hypervolume_history.push_back(current_hypervolume);
+        if (t > 10 && has_converged(hypervolume_history, 0.00001, 100)) {
+            std::cout << " Converged after " << t << " generations." << std::endl;
+            break;
+        }
 
         t++;
     }
@@ -529,48 +647,61 @@ int main() {
     initialCalculations();
 
     std::cout << "Step 1: Generating population..." << std::endl;
-    std::vector<Stack> population = generatePopulation(initial_population, initial_max_stack_size);
-
-    NSGA2(population, population.size(), 5000);
-
-    // Finished
-    auto stop = std::chrono::high_resolution_clock::now();
-    // if (converged) {
-    //     std::cout << "--- Converged! ---" << std::endl;
-    // } else {
-    //     std::cout << "--- Optimizer finished before completion. ---" << std::endl;
-    // }
-
-    std::cout << "Number of solutions: " << population.size() << std::endl;
-    std::cout << "Found following Solution: " << std::endl;
+    const double stepSize = initial_max_stack_size / initial_population;
+    std::vector<Stack> best_pareto_front = {};
+    std::vector<Stack> population = {};
+    for (int run = 0; run < runs; run++) {
+        std::cout << "Run " << run + 1 << " of " << runs << " ";
+        population = {};
+        for (int i = 1; i <= initial_population; i++) {
+            population.push_back(generateStack(static_cast<int>(stepSize * i)));
+        }
+        if (best_pareto_front.empty())
+            best_pareto_front = population;
+        NSGA2(population, static_cast<int>(population.size()), 5000);
+        best_pareto_front.insert(best_pareto_front.end(), population.begin(), population.end());
+    }
+    population = best_pareto_front;
 
     std::sort(population.begin(), population.end(),
-              [](const Stack &lhs, const Stack &rhs) {
-                  return lhs.rank < rhs.rank;
-              });
+          [](const Stack &lhs, const Stack &rhs) {
+              if (lhs.rank != rhs.rank) {
+                  return lhs.rank < rhs.rank;  // Sort by rank first (smaller rank is better)
+              } else {
+                  return lhs.stackingSequence.size() < rhs.stackingSequence.size();  // If ranks are the same, sort by stack size
+              }
+          });
 
-    population[0].calculateFitness();
-    std::cout << "  RF: " << population[0].RF << std::endl;
-    std::cout << "  Rank: " << population[0].rank << std::endl;
-    std::cout << "  Stack Size: " << 2 * population[0].stackingSequence.size() << std::endl;
-    std::cout << "  Stacking Sequence: " << std::endl;
-    for (const PlyOrientation ply: population[0].stackingSequence) {
-        std::string plyOrientation = plyOrientationToString(ply);
-        std::cout << "      " << plyOrientation << std::endl;
+    // Finished
+    const auto stop = std::chrono::high_resolution_clock::now();
+
+    std::cout << "Number of solutions: " << population.size() << std::endl;
+    if (!show_all_solutions) {
+        std::cout << "Found following Solution: " << std::endl;
+
+        std::cout << "  RF: " << population[0].RF << std::endl;
+        std::cout << "  Rank: " << population[0].rank << std::endl;
+        std::cout << "  Stack Size: " << 2 * population[0].stackingSequence.size() << std::endl;
+        std::cout << "  Stacking Sequence: " << std::endl;
+        for (const PlyOrientation ply: population[0].stackingSequence) {
+            std::string plyOrientation = plyOrientationToString(ply);
+            std::cout << "      " << plyOrientation << std::endl;
+        }
+        std::cout << "  --- Mid Plane --- " << std::endl;
+    } else {
+        for (Stack s: population) {
+            s.calculateFitness();
+            std::cout << "  RF: " << s.RF << std::endl;
+            std::cout << "  Fitness: " << s.rank << std::endl;
+            std::cout << "  Stack Size: " << 2 * s.stackingSequence.size() << std::endl;
+            std::cout << "  Stacking Sequence: " << std::endl;
+            for (const PlyOrientation ply: s.stackingSequence) {
+                std::string plyOrientation = plyOrientationToString(ply);
+                std::cout << "      " << plyOrientation << std::endl;
+            }
+            std::cout << "  --- Mid Plane --- " << std::endl;
+        }
     }
-    std::cout << "  --- Mid Plane --- " << std::endl;
-    // for (Stack s: population) {
-    //     s.calculateFitness();
-    //     std::cout << "  RF: " << s.RF << std::endl;
-    //     std::cout << "  Fitness: " << s.rank << std::endl;
-    //     std::cout << "  Stack Size: " << 2 * s.stackingSequence.size() << std::endl;
-    //     std::cout << "  Stacking Sequence: " << std::endl;
-    //     for (const PlyOrientation ply: s.stackingSequence) {
-    //         std::string plyOrientation = plyOrientationToString(ply);
-    //         std::cout << "      " << plyOrientation << std::endl;
-    //     }
-    //     std::cout << "  --- Mid Plane --- " << std::endl;
-    // }
 
     std::cout << "\n\nTime taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() <<
             "ms" << std::endl;
