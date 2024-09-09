@@ -19,7 +19,7 @@ double b = 400.0;
 double plyThickness = 0.184;
 
 // Force per width [kN/mm]
-double Nx = -0.3;
+double Nx = -0.2;
 double Ny = -0.01;
 double Tau = 0.1;
 
@@ -40,14 +40,21 @@ int initial_population = 150;
 double initial_max_stack_size = 50;
 
 // Mutation Parameters
-double initial_mutation_rate = 0.3;
-int stack_size_variability = 2;
+/// Adaptive mutation is used. ///
+double initial_mutation_rate = 1; // All positive values are allowed. A value of 0 deactivates ply orientation mutation.
+double slope = 0.5; // Decides how fast the mutation rate is reduced. Linear Slope. 0: mutation rate remains constant.
+int stack_size_variability = 2; // Changes in size of the stack. Does not depend on slope or initial mutation rate.
+
+// Convergence
+double threshold = 0.0001; // By how much the hypervolume must improve.
+int previous_generations = 100; // Number of generations of the hypervolume to improve for convergence to be true.
+const std::vector<double>  reference_point = {16, 1};
 
 // Consistent Measures
-constexpr int runs = 10;
+constexpr int runs = 2; // To improve the consistency further, the NSGAII algorithm is being run several times.
 
 // Output
-bool show_all_solutions = false;
+bool show_all_solutions = false; // Only the best solution is given in the console when this is set to false.
 
 
 /*
@@ -483,7 +490,7 @@ bool isBalanced(const std::vector<PlyOrientation>& stackingSequence) {
 }
 
 double adaptiveMutationRate(int currentGeneration, int maxGenerations) {
-    return initial_mutation_rate * (1 - (static_cast<double>(currentGeneration) / maxGenerations));
+    return initial_mutation_rate * (1 - slope * (static_cast<double>(currentGeneration) / maxGenerations));
 }
 
 
@@ -495,8 +502,9 @@ void mutation(Stack &offspring, int currentGeneration, int maxGenerations, bool 
 
     std::uniform_real_distribution<> mutation_dist(0.0, 1.0);
 
-    std::uniform_int_distribution<> angle_dist(0, 3);
     const std::vector<int> angles = {0, 45, -45, 90};  // Ply orientations
+    std::uniform_int_distribution<> angle_dist(0, static_cast<int>(angles.size()-1));
+
 
     for (int i = 0; i < offspring.stackingSequence.size(); ++i) {
         if (mutation_dist(gen) < mutation_rate) {
@@ -506,7 +514,7 @@ void mutation(Stack &offspring, int currentGeneration, int maxGenerations, bool 
     }
 
     if (mutation_dist(gen) < mutation_rate) {
-        std::uniform_int_distribution<> size_change_dist(-stack_size_variability, stack_size_variability);  // Allow +/-2 plies change
+        std::uniform_int_distribution<> size_change_dist(-stack_size_variability, stack_size_variability);
         const int size_change = size_change_dist(gen);
 
         if (const int new_size = std::max(1, static_cast<int>(offspring.stackingSequence.size()) + size_change); new_size > offspring.stackingSequence.size()) {
@@ -571,7 +579,7 @@ std::vector<Stack> make_new_pop(const std::vector<Stack>& population, int t, int
     return new_population;
 }
 
-double calculate_hypervolume(const std::vector<Stack> &pareto_front, const std::vector<double> &reference_point) {
+double calculate_hypervolume(const std::vector<Stack> &pareto_front) {
     double hypervolume = 0.0;
 
     std::vector<Stack> sorted_front = pareto_front;
@@ -592,11 +600,11 @@ double calculate_hypervolume(const std::vector<Stack> &pareto_front, const std::
     return hypervolume;
 }
 
-bool has_converged(const std::vector<double> &hypervolume_history, const double threshold = 0.0001, const int window_size = 100) {
-    if (hypervolume_history.size() < window_size) return false;
+bool has_converged(const std::vector<double> &hypervolume_history) {
+    if (hypervolume_history.size() < previous_generations) return false;
 
     const double recent_improvement = (hypervolume_history.back() - hypervolume_history[
-                                           hypervolume_history.size() - window_size]) / hypervolume_history.back();
+                                           hypervolume_history.size() - previous_generations]) / hypervolume_history.back();
     return recent_improvement < threshold;
 }
 
@@ -630,9 +638,9 @@ void NSGA2(std::vector<Stack> &Pt, const int N, const int generations) {
 
         Pt = Pt_1;
 
-        double current_hypervolume = calculate_hypervolume(F[0], {16, 1});
+        double current_hypervolume = calculate_hypervolume(F[0]);
         hypervolume_history.push_back(current_hypervolume);
-        if (t > 10 && has_converged(hypervolume_history, 0.00001, 100)) {
+        if (t > 10 && has_converged(hypervolume_history)) {
             std::cout << " Converged after " << t << " generations." << std::endl;
             break;
         }
@@ -646,7 +654,6 @@ int main() {
     const auto start = std::chrono::high_resolution_clock::now();
     initialCalculations();
 
-    std::cout << "Step 1: Generating population..." << std::endl;
     const double stepSize = initial_max_stack_size / initial_population;
     std::vector<Stack> best_pareto_front = {};
     std::vector<Stack> population = {};
@@ -671,6 +678,11 @@ int main() {
                   return lhs.stackingSequence.size() < rhs.stackingSequence.size();  // If ranks are the same, sort by stack size
               }
           });
+
+    for (int p = 0; p < population.size(); p++) {
+        if (population[p].RF < 1)
+            population.erase(population.begin() + p);
+    }
 
     // Finished
     const auto stop = std::chrono::high_resolution_clock::now();
