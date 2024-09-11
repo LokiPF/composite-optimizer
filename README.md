@@ -101,11 +101,13 @@ Found following Solution:
 ```
 
 Sources:
+
 [1]: K. Deb, A. Pratap, S. Agarwal and T. Meyarivan, "A fast and elitist multiobjective genetic algorithm: NSGA-II,"
 in
 IEEE Transactions on Evolutionary Computation, vol. 6, no. 2, pp. 182-197, April 2002, doi: 10.1109/4235.996017.
 keywords: {Genetic algorithms;Sorting;Computational complexity;Evolutionary computation;Computational
 modeling;Testing;Decision making;Associate members;Diversity reception;Constraint optimization},
+
 [2]: OpenAI, "Consultation on small portions of composite laminate optimization and  helper function implementation," ChatGPT model, version 4, OpenAI, 2024. [Online].
 
 
